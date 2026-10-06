@@ -42,24 +42,24 @@
 
 /* ----------------------------------------------------------------------------------------------------------------- */
 
-#define ASM         1 <<  0
-#define CONTRAST    1 <<  1
-#define CORRELATION 1 <<  2
-#define SSQ         1 <<  3
-#define INVDIFFM    1 <<  4
-#define SUMAVG      1 <<  5
-#define SUMVAR      1 <<  6
-#define SUMENTRP    1 <<  7
-#define ENTROPY     1 <<  8
-#define DIFFVAR     1 <<  9
-#define DIFFENTRP   1 << 10
-#define AUTOCORR    1 << 11
-#define CLSTRPROM   1 << 12
-#define CLSTRSHAD   1 << 13
-#define CLSTRTEND   1 << 14
-#define DISSIM      1 << 15
-#define INVDIFF     1 << 16
-#define DIFFAVG     1 << 15
+#define ASM         (1 <<  0)
+#define CONTRAST    (1 <<  1)
+#define CORRELATION (1 <<  2)
+#define SSQ         (1 <<  3)
+#define INVDIFFM    (1 <<  4)
+#define SUMAVG      (1 <<  5)
+#define SUMVAR      (1 <<  6)
+#define SUMENTRP    (1 <<  7)
+#define ENTROPY     (1 <<  8)
+#define DIFFVAR     (1 <<  9)
+#define DIFFENTRP   (1 << 10)
+#define AUTOCORR    (1 << 11)
+#define CLSTRPROM   (1 << 12)
+#define CLSTRSHAD   (1 << 13)
+#define CLSTRTEND   (1 << 14)
+#define DISSIM      (1 << 15)
+#define INVDIFF     (1 << 16)
+#define DIFFAVG     (1 << 17)  /* was 1 << 15, colliding with DISSIM */
 
 #define eps  2.22045e-16
 
@@ -1871,6 +1871,7 @@ PyInit_glcm(void)
 	PyModule_AddIntConstant(module, "sumavg",       SUMAVG);
 	PyModule_AddIntConstant(module, "sumvar",       SUMVAR);
 	PyModule_AddIntConstant(module, "sumentrp",     SUMENTRP);
+	PyModule_AddIntConstant(module, "entropy",      ENTROPY);
 	PyModule_AddIntConstant(module, "diffavg",      DIFFAVG);
 	PyModule_AddIntConstant(module, "diffvar",      DIFFVAR);
 	PyModule_AddIntConstant(module, "diffentrp",    DIFFENTRP);

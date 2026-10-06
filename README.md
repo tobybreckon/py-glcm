@@ -227,6 +227,7 @@ Calculates features from a given set of GLCMs.
 | Sum Average               | `glcm.sumavg`       | `"Sum Average"`        |                     |
 | Sum Variance              | `glcm.sumvar`       | `"Sum Variance"`       |                     |
 | Sum Entropy               | `glcm.sumentrp`     | `"Sum Entropy"`        |                     |
+| Entropy                   | `glcm.entropy`      | `"Entropy"`            |                     |
 | Difference Average        | `glcm.diffavg`      | `"Diff Average"`       |                     |
 | Difference Variance       | `glcm.diffvar`      | `"Diff Variance"`      | Not implemented yet |
 | Difference Entropy        | `glcm.diffentrp`    | `"Diff Entropy"`       |                     |
@@ -236,3 +237,5 @@ Calculates features from a given set of GLCMs.
 | Dissimilarity             | `glcm.dissim`       | `"Dissimilarity"`      |                     |
 
 The Angular Second Moment, `ASM = sum over i, j of p(i, j)^2`, measures how homogeneous the patterns in the image are.
+
+Entropy, Sum Entropy and Difference Entropy are computed with the base-10 logarithm.
