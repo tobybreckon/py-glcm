@@ -2,10 +2,24 @@
 #include <numpy/arrayobject.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 #include <bitset>
 
+/* --- NUMPY 1.x / 2.x COMPATIBILITY ------------------------------------------------------------------------------- */
+/* NumPy 2.0 made PyArray_Descr opaque; these accessors exist from 2.0 on, so provide fallbacks for 1.x headers. */
+#if NPY_ABI_VERSION < 0x02000000
+  #define PyDataType_GetArrFuncs(descr) ((descr)->f)
+  #define PyDataType_ELSIZE(descr)      ((descr)->elsize)
+#endif
+
 /* --- INTRINSICS -------------------------------------------------------------------------------------------------- */
-#pragma intrinsic(__popcnt)
+#ifdef _MSC_VER
+  #include <intrin.h>
+  #pragma intrinsic(__popcnt)
+  #define GLCM_POPCOUNT(x) __popcnt(x)
+#else
+  #define GLCM_POPCOUNT(x) __builtin_popcount(x)
+#endif
 
 /* --- MAKROS ------------------------------------------------------------------------------------------------------ */
 
@@ -69,7 +83,7 @@ PyArray_bin(PyArrayObject* iarr, int bins)
 
     PyArray_ArgFunc *argmax;
 
-    argmax = PyArray_DESCR(iarr)->f->argmax;
+    argmax = PyDataType_GetArrFuncs(PyArray_DESCR(iarr))->argmax;
     argmax(PyArray_DATA(iarr), PyArray_SIZE(iarr), &max, NULL);
 
     op[0] = iarr;
@@ -147,8 +161,12 @@ PyArray_get_max_idx(npy_intp ndim, npy_intp* dims)
 NPY_NO_EXPORT npy_intp*
 PyArray_get_multi_index(npy_intp ndim, npy_intp* dims, npy_intp index)
 {
-    npy_intp idx[NPY_MAXDIMS] = {0};
+    /* Static buffer: returning a pointer to a stack array is undefined behaviour. Callers use the result
+       immediately and never hold it across calls, and the GIL serialises access. */
+    static npy_intp idx[NPY_MAXDIMS];
     int i, div=1;
+
+    memset(idx, 0, sizeof(idx));
 
     for(i = ((int) ndim) - 1; i >= 0; i--){
         idx[i] = (npy_intp) (index / div) % (int) dims[i];
@@ -177,7 +195,7 @@ PyArray_glcm_gen_dirs(PyArrayObject* dirs, PyArrayObject* dists, int symmetric)
     }
 
     shape[0] = PyArray_DIMS(dists)[0];
-    shape[1] = __popcnt(dir_bits); // only works with MSVC, for GCC use __builtin_popcount();
+    shape[1] = GLCM_POPCOUNT((unsigned int) dir_bits);
 
     oarr = (PyArrayObject *) PyArray_ZEROS(3, shape, NPY_INT, 0);
 
@@ -295,7 +313,7 @@ PyArray_pad(PyArrayObject* inarr, int width)
 
     if(ndim == 2){
         for (i = 0; i < ishape[0]; i++){
-            memcpy(PyArray_GETPTR2(oarr, i+width, width), PyArray_GETPTR2(inarr, i, 0), ishape[1] * dtype->elsize);
+            memcpy(PyArray_GETPTR2(oarr, i+width, width), PyArray_GETPTR2(inarr, i, 0), ishape[1] * PyDataType_ELSIZE(dtype));
         }
     }
     else if(ndim == 3){
@@ -361,7 +379,7 @@ PyArray_glcm_mean(PyArrayObject* glcm, int symmetric)
 }
 
 NPY_NO_EXPORT PyArrayObject*
-PyArray_comb_prob(PyArrayObject* glcm, int symmetric, char* mode)
+PyArray_comb_prob(PyArrayObject* glcm, int symmetric, const char* mode)
 {
     PyArrayObject *prob;
     npy_intp idx, max_idx, bins, ndim, *shape, *multi_idx, px, py;
@@ -460,7 +478,7 @@ PyArray_glcm_sum(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists,
 {
     PyArrayObject *glcm;
     npy_intp glcm_dims[NPY_MAXDIMS];
-    int dist,dx,dy,dd,ddst,ddx,ddy,arr_dimx,arr_dimy,arr_ndch,dir_dim,dist_dim, ids,idt, *dpx, *dpy;
+    int dx,dy,dd,ddst,ddx,ddy,arr_dimx,arr_dimy,arr_ndch,dir_dim,dist_dim, *dpx, *dpy;
 
     PTR_OUT *val, add=1.0;
 
@@ -478,7 +496,6 @@ PyArray_glcm_sum(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists,
 
         if(symmetric){
             for(ddst = 0; ddst < dist_dim; ddst++){
-                dist = *((int*) PyArray_GETPTR1(dists, ddst));
 
                 for (dd = 0; dd < dir_dim; dd++){
                     ddx = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 0));
@@ -505,7 +522,6 @@ PyArray_glcm_sum(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists,
             }
         }else{
             for(ddst = 0; ddst < dist_dim; ddst++){
-                dist = *((int*) PyArray_GETPTR1(dists, ddst));
 
                 for (dd = 0; dd < dir_dim; dd++){
                     ddx = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 0));
@@ -550,7 +566,6 @@ PyArray_glcm_sum(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists,
         if(symmetric){
             for(ddst = 0; ddst < dist_dim; ddst++){
 
-                dist = *((int*) PyArray_GETPTR1(dists, ddst));
                 for (dd = 0; dd < dir_dim; dd++){
                     ddx = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 0));
                     ddy = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 1));
@@ -577,7 +592,6 @@ PyArray_glcm_sum(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists,
             }
         }else{
             for(ddst = 0; ddst < dist_dim; ddst++){
-                dist = *((int*) PyArray_GETPTR1(dists, ddst));
 
                 for (dd = 0; dd < dir_dim; dd++){
                     ddx = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 0));
@@ -619,7 +633,7 @@ PyArray_glcm_raw(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists,
 {
     PyArrayObject *glcm;
     npy_intp glcm_dims[NPY_MAXDIMS];
-    int dist,dx,dy,dd,ddst,ddx,ddy,arr_dimx,arr_dimy,arr_ndch,dir_dim,dist_dim, ids,idt, *dpx, *dpy;
+    int dx,dy,dd,ddst,ddx,ddy,arr_dimx,arr_dimy,arr_ndch,dir_dim,dist_dim, *dpx, *dpy;
 
     PTR_OUT *val, add=1.0;
 
@@ -638,7 +652,6 @@ PyArray_glcm_raw(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists,
 
         if(symmetric){
             for(ddst = 0; ddst < dist_dim; ddst++){
-                dist = *((int*) PyArray_GETPTR1(dists, ddst));
 
                 for (dd = 0; dd < dir_dim; dd++){
                     ddx = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 0));
@@ -665,7 +678,6 @@ PyArray_glcm_raw(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists,
             }
         }else{
             for(ddst = 0; ddst < dist_dim; ddst++){
-                dist = *((int*) PyArray_GETPTR1(dists, ddst));
 
                 for (dd = 0; dd < dir_dim; dd++){
                     ddx = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 0));
@@ -711,7 +723,6 @@ PyArray_glcm_raw(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists,
         if(symmetric){
             for(ddst = 0; ddst < dist_dim; ddst++){
 
-                dist = *((int*) PyArray_GETPTR1(dists, ddst));
                 for (dd = 0; dd < dir_dim; dd++){
                     ddx = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 0));
                     ddy = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 1));
@@ -738,7 +749,6 @@ PyArray_glcm_raw(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists,
             }
         }else{
             for(ddst = 0; ddst < dist_dim; ddst++){
-                dist = *((int*) PyArray_GETPTR1(dists, ddst));
 
                 for (dd = 0; dd < dir_dim; dd++){
                     ddx = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 0));
@@ -778,9 +788,9 @@ PyArray_glcm_raw(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists,
 template <typename PTR_IN, typename PTR_OUT, int NPY_OTYPE> NPY_NO_EXPORT PyArrayObject*
 PyArray_xglcm_sum(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists, int bins, int symmetric, int normalized)
 {
-    PyArrayObject *glcm;
+    PyArrayObject *glcm = NULL;
     npy_intp glcm_dims[NPY_MAXDIMS];
-    int idx_dist, idx_dir, idx_px, idx_py, arr_dimx, arr_dimy, arr_ndch, dist_dim, dir_dim, arr_chan_cmb, dist, dirx, diry, chan_src, chan_dst, npx;
+    int idx_dist, idx_dir, idx_px, idx_py, arr_dimx, arr_dimy, arr_ndch, dist_dim, dir_dim, arr_chan_cmb, dirx, diry, chan_src, chan_dst;
 
     PTR_OUT *val, cntrb=1.0;
     PTR_IN *dp_src, *dp_dst;
@@ -836,7 +846,7 @@ PyArray_xglcm_sum(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists
             }
         }
     }else{
-
+        PyErr_SetString(PyExc_ValueError, "xglcm requires a 3D (multi-channel) input array");
     }
 
     return glcm;
@@ -845,9 +855,9 @@ PyArray_xglcm_sum(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists
 template <typename PTR_OUT, int NPY_OTYPE> NPY_NO_EXPORT PyArrayObject*
 PyArray_xglcm_raw(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists, int bins, int symmetric, int normalized)
 {
-    PyArrayObject *glcm;
+    PyArrayObject *glcm = NULL;
     npy_intp glcm_dims[NPY_MAXDIMS];
-    int dist,dx,dy,dc_dst, dc_src,dd,ddst,ddx,ddy,arr_dimx,arr_dimy, arr_ndch, dir_dim,dist_dim, ids,idt, *dpx, *dpy, *dpc;
+    int dx,dy,dc_dst, dc_src,dd,ddst,ddx,ddy,arr_dimx,arr_dimy, arr_ndch, dir_dim,dist_dim, *dpx, *dpy;
 
     PTR_OUT *val, add=1.0;
 
@@ -870,7 +880,6 @@ PyArray_xglcm_raw(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists
         if(symmetric){
             for(ddst = 0; ddst < dist_dim; ddst++){
 
-                dist = *((int*) PyArray_GETPTR1(dists, ddst));
                 for (dd = 0; dd < dir_dim; dd++){
                     ddx = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 0));
                     ddy = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 1));
@@ -899,7 +908,6 @@ PyArray_xglcm_raw(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists
             }
         }else{
             for(ddst = 0; ddst < dist_dim; ddst++){
-                dist = *((int*) PyArray_GETPTR1(dists, ddst));
 
                 for (dd = 0; dd < dir_dim; dd++){
                     ddx = *((int*) PyArray_GETPTR3(dirs, ddst, dd, 0));
@@ -947,7 +955,7 @@ PyArray_angular_second_moment(PyArrayObject* glcm)
     NpyIter_IterNextFunc *iternext;
     int px,py;
     char **dataptr;
-    npy_intp *strideptr, idx[NPY_MAXDIMS] = {0};
+    npy_intp idx[NPY_MAXDIMS] = {0};
 
     ndim = PyArray_NDIM(glcm);
     shape = PyArray_SHAPE(glcm);
@@ -969,7 +977,6 @@ PyArray_angular_second_moment(PyArrayObject* glcm)
     }
 
     dataptr = NpyIter_GetDataPtrArray(iter);
-    strideptr = NpyIter_GetInnerStrideArray(iter);
 
     NpyIter_GetMultiIndexFunc *get_multi_index = NpyIter_GetGetMultiIndex(iter, NULL); /* I'm a totally documented function! */
 
@@ -977,7 +984,6 @@ PyArray_angular_second_moment(PyArrayObject* glcm)
 
     do {
         double *dst = (double *) *dataptr;
-        npy_intp stride = *strideptr;
 
         get_multi_index(iter, idx);
         src = (double*) PyArray_GetPtr(glcm, idx);
@@ -1163,7 +1169,7 @@ PyArray_sum_average(PyArrayObject* glcm, PyArrayObject* cprob)
 {
     PyArrayObject *feature;
     npy_intp idx, max_idx, bins, ndim, *shape, *multi_idx, px;
-    double *dst, *src, *prb;
+    double *dst, *prb;
 
     ndim = PyArray_NDIM(glcm);
     shape = PyArray_SHAPE(glcm);
@@ -1177,7 +1183,6 @@ PyArray_sum_average(PyArrayObject* glcm, PyArrayObject* cprob)
 
         dst = (double *) PyArray_GetPtr(feature, multi_idx);
         prb = (double *) PyArray_GetPtr(cprob, multi_idx);
-        src = (double *) PyArray_GetPtr(glcm, multi_idx);
 
         for(px = 0; px < 2*bins - 1; px++){
             *dst += (px+2) * prb[px];
@@ -1192,7 +1197,7 @@ PyArray_sum_entropy(PyArrayObject* glcm, PyArrayObject* cprob)
 {
     PyArrayObject *feature;
     npy_intp idx, max_idx, bins, ndim, *shape, *multi_idx, px;
-    double *dst, *src, *prb;
+    double *dst, *prb;
 
     ndim = PyArray_NDIM(glcm);
     shape = PyArray_SHAPE(glcm);
@@ -1206,7 +1211,6 @@ PyArray_sum_entropy(PyArrayObject* glcm, PyArrayObject* cprob)
 
         dst = (double *) PyArray_GetPtr(feature, multi_idx);
         prb = (double *) PyArray_GetPtr(cprob, multi_idx);
-        src = (double *) PyArray_GetPtr(glcm, multi_idx);
 
         for(px = 0; px < 2*bins - 1; px++){
             *dst += prb[px] * log10(prb[px] + eps);
@@ -1221,7 +1225,7 @@ PyArray_sum_var(PyArrayObject* glcm, PyArrayObject* cprob, PyArrayObject* savg)
 {
     PyArrayObject *feature;
     npy_intp idx, max_idx, bins, ndim, *shape, *multi_idx, px;
-    double *dst, *src, *prb, *sa;
+    double *dst, *prb, *sa;
 
     ndim = PyArray_NDIM(glcm);
     shape = PyArray_SHAPE(glcm);
@@ -1235,7 +1239,6 @@ PyArray_sum_var(PyArrayObject* glcm, PyArrayObject* cprob, PyArrayObject* savg)
 
         dst = (double *) PyArray_GetPtr(feature, multi_idx);
         prb = (double *) PyArray_GetPtr(cprob, multi_idx);
-        src = (double *) PyArray_GetPtr(glcm, multi_idx);
         sa  = (double *) PyArray_GetPtr(savg, multi_idx);
 
         for(px = 0; px < 2*bins - 1; px++){
@@ -1250,8 +1253,8 @@ NPY_NO_EXPORT PyArrayObject*
 PyArray_diff_average(PyArrayObject* glcm, PyArrayObject* dprob)
 {
     PyArrayObject *feature;
-    npy_intp idx, max_idx, bins, ndim, *shape, *multi_idx, px, py;
-    double *dst, *src, *prb;
+    npy_intp idx, max_idx, bins, ndim, *shape, *multi_idx, px;
+    double *dst, *prb;
 
     ndim = PyArray_NDIM(glcm);
     shape = PyArray_SHAPE(glcm);
@@ -1265,7 +1268,6 @@ PyArray_diff_average(PyArrayObject* glcm, PyArrayObject* dprob)
 
         dst = (double *) PyArray_GetPtr(feature, multi_idx);
         prb = (double *) PyArray_GetPtr(dprob, multi_idx);
-        src = (double *) PyArray_GetPtr(glcm, multi_idx);
 
         for(px = 0; px < bins; px++){
             *dst += px * prb[px];
@@ -1279,8 +1281,8 @@ NPY_NO_EXPORT PyArrayObject*
 PyArray_diff_entropy(PyArrayObject* glcm, PyArrayObject* dprob)
 {
     PyArrayObject *feature;
-    npy_intp idx, max_idx, bins, ndim, *shape, *multi_idx, px, py;
-    double *dst, *src, *prb;
+    npy_intp idx, max_idx, bins, ndim, *shape, *multi_idx, px;
+    double *dst, *prb;
 
     ndim = PyArray_NDIM(glcm);
     shape = PyArray_SHAPE(glcm);
@@ -1294,7 +1296,6 @@ PyArray_diff_entropy(PyArrayObject* glcm, PyArrayObject* dprob)
 
         dst = (double *) PyArray_GetPtr(feature, multi_idx);
         prb = (double *) PyArray_GetPtr(dprob, multi_idx);
-        src = (double *) PyArray_GetPtr(glcm, multi_idx);
 
         for(px = 0; px < bins; px++){
             *dst += prb[px] * log10(prb[px] + eps);
@@ -1603,12 +1604,12 @@ PyArray_inverse_diff(PyArrayObject* glcm, int symmetric)
 static PyObject*
 array_bin(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
 {
-    static  char *kwlist[] = {"array", "bins", NULL};
+    static const char *kwlist[] = {"array", "bins", NULL};
     PyObject *array;
     PyArrayObject *iarr, *oarr;
     npy_intp bins;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "Oi", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "Oi", (char **) kwlist,
                 &array, &bins)) {
         return NULL;
     }
@@ -1626,13 +1627,13 @@ array_bin(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
 static PyObject*
 array_glcm(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
 {
-    static  char *kwlist[] = {"array", "dists", "dirs", "mode", "symmetric", "bins", "normalized", "check", NULL};
+    static const char *kwlist[] = {"array", "dists", "dirs", "mode", "symmetric", "bins", "normalized", "check", NULL};
     PyObject *array, *directions, *distances;
     PyArrayObject *iarr, *dirs, *dists, *glcm;
     int check=1, bins=256, symmetric=1, normalized=1;
     char *mode;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOs|iiii", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOs|iiii", (char **) kwlist,
                 &array, &distances, &directions, &mode, &symmetric, &bins, &normalized, &check)) {
         return NULL;
     }
@@ -1679,13 +1680,13 @@ array_glcm(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
 static PyObject*
 array_xglcm(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
 {
-    static  char *kwlist[] = {"array", "dists", "dirs", "mode", "symmetric", "bins", "normalized", "check", NULL};
+    static const char *kwlist[] = {"array", "dists", "dirs", "mode", "symmetric", "bins", "normalized", "check", NULL};
     PyObject *array, *directions, *distances;
     PyArrayObject *iarr, *dirs, *dists, *glcm;
     int check=1, bins=256, symmetric=1, normalized=1;
     char *mode;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOs|iiii", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOs|iiii", (char **) kwlist,
                 &array, &distances, &directions, &mode, &symmetric, &bins, &normalized, &check)) {
         return NULL;
     }
@@ -1729,12 +1730,12 @@ array_xglcm(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
 static PyObject*
 array_glcm_features(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
 {
-    static  char *kwlist[] = {"array", "features", "normalized", "symmetric", NULL};
+    static const char *kwlist[] = {"array", "features", "normalized", "symmetric", NULL};
     PyObject *array, *dict;
-    PyArrayObject *iarr, *oarr;
+    PyArrayObject *iarr;
     int features, normalized=1, symmetric=1;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "Oi|ii", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "Oi|ii", (char **) kwlist,
                 &array, &features, &normalized, &symmetric)) {
         return NULL;
     }
@@ -1777,7 +1778,7 @@ array_glcm_features(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwd
     }
 
     if(features & (DIFFAVG | DIFFVAR | DIFFENTRP)){
-        PyArrayObject *dprob, *savg=NULL;
+        PyArrayObject *dprob;
 
         dprob = PyArray_comb_diff(iarr, symmetric);
 

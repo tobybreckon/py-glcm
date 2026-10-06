@@ -1,6 +1,6 @@
 # Installation
 
-    python setup.py install
+    pip install .
     
 # Usage
 * [Grey Level Co-occurance Matrix](# Grey Level Co-occurance Matrix)

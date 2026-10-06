@@ -5,7 +5,7 @@ import numpy as np
 import time
 import radiomics
 from scipy import ndimage
-from skimage.feature import greycomatrix, greycoprops
+from skimage.feature import graycomatrix, graycoprops
 
 #patch = ndimage.imread("./img/01-002.png").astype(np.int)
 patch = (np.random.rand(1000, 1000, 1) * 256).astype(np.int32)
@@ -24,7 +24,7 @@ patch = patch.reshape((1000, 1000))
 
 t = time.clock()
 for i in range(10):
-    glcm = greycomatrix(patch, [1], [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4], 256, symmetric=True, normed=True)
+    glcm = graycomatrix(patch, [1], [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4], 256, symmetric=True, normed=True)
 t = time.clock() - t
 print("Time elapsed for scitkit: %f" % t)
 
