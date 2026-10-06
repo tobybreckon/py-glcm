@@ -75,11 +75,12 @@ Generates a GLCM.
 
 * **dists** : *array_like*
 
-  Array of desired integer distances `[d1, d2, ..., dn]`.
+  Array of desired positive integer distances `[d1, d2, ..., dn]`.
 
 * **dirs** : *array_like*
 
   Array of desired integer directions `[d1, d2, ..., dn]`. 1 corresponds to N, 2 to NE, 3 to E, ... and 8 to NW.
+  Values outside 1 to 8 raise a `ValueError`.
 
   > **Caution!** Directions will be reordered in ascending order. To avoid confusing outputs, make sure to provide
   > an ordered array.
@@ -100,8 +101,10 @@ Generates a GLCM.
 
 * **bins** : *int, optional*
 
-  Number of bins. When input checking is enabled, the input image is binned to this number if the maximum image
-  value exceeds the number of bins. This also happens if the input image is not of integer type.
+  Number of grey levels. Integer images with all values in `[0, bins - 1]` are used as they are. Any other input is
+  binned: `[0, max]` is split into `bins` equal-width bins. Non-integer images are always binned. Integer images
+  with values `>= bins` are binned when `check=True`, and rejected with a `ValueError` otherwise. Images containing
+  negative, NaN or infinite values are always rejected.
 
 * **normalized** : *boolean, optional*
 
@@ -111,7 +114,8 @@ Generates a GLCM.
 
 * **check** : *boolean, optional*
 
-  Determines whether the input is checked for correctness.
+  Determines whether out-of-range integer input is binned automatically (with a warning) instead of rejected. Values
+  are always range-checked, so invalid input never causes out-of-bounds memory access.
 
 ### Returns
 
@@ -131,15 +135,16 @@ Generates a GLCM for every channel combination.
 
 * **array** : *array_like*
 
-  Input image with three dimensions and shape `[dimx, dimy, channels]`.
+  Input image with three dimensions and shape `[dimx, dimy, channels]`, with at least 2 channels.
 
 * **dists** : *array_like*
 
-  Array of desired integer distances `[d1, d2, ..., dn]`.
+  Array of desired positive integer distances `[d1, d2, ..., dn]`.
 
 * **dirs** : *array_like*
 
   Array of desired integer directions `[d1, d2, ..., dn]`. 1 corresponds to N, 2 to NE, 3 to E, ... and 8 to NW.
+  Values outside 1 to 8 raise a `ValueError`.
 
   > **Caution!** Directions will be reordered in ascending order. To avoid confusing outputs, make sure to provide
   > an ordered array.
@@ -153,6 +158,9 @@ Generates a GLCM for every channel combination.
   In sum mode, all desired directions are added together, so only one GLCM per distance is generated. This is far
   more efficient than summing up afterwards.
 
+  > **Note:** For `xglcm`, sum mode is only implemented for `symmetric=True`; other combinations raise
+  > `NotImplementedError`.
+
 * **symmetric** : *boolean, optional*
 
   > **Caution!** Running in symmetric mode will remove opposing directions and will replace directions 5 to 8 with
@@ -160,8 +168,10 @@ Generates a GLCM for every channel combination.
 
 * **bins** : *int, optional*
 
-  Number of bins. When input checking is enabled, the input image is binned to this number if the maximum image
-  value exceeds the number of bins. This also happens if the input image is not of integer type.
+  Number of grey levels. Integer images with all values in `[0, bins - 1]` are used as they are. Any other input is
+  binned: `[0, max]` is split into `bins` equal-width bins. Non-integer images are always binned. Integer images
+  with values `>= bins` are binned when `check=True`, and rejected with a `ValueError` otherwise. Images containing
+  negative, NaN or infinite values are always rejected.
 
 * **normalized** : *boolean, optional*
 
@@ -171,7 +181,8 @@ Generates a GLCM for every channel combination.
 
 * **check** : *boolean, optional*
 
-  Determines whether the input is checked for correctness.
+  Determines whether out-of-range integer input is binned automatically (with a warning) instead of rejected. Values
+  are always range-checked, so invalid input never causes out-of-bounds memory access.
 
 ### Returns
 
@@ -193,11 +204,13 @@ Calculates features from a given set of GLCMs.
 
 * **array** : *array_like*
 
-  Array of GLCMs, where the last two axes hold the GLCM entries.
+  A single GLCM or an array of GLCMs, where the last two (equally sized) axes hold the GLCM entries, e.g. the
+  output of `glcm.glcm`.
 
 * **features** : *int*
 
   Bit flags selecting the desired features, combined with `|`. See [Supported Features](#supported-features).
+  Requesting a feature that is not implemented yet emits a `RuntimeWarning` and it is left out of the result.
 
 * **symmetric** : *boolean, optional*
 

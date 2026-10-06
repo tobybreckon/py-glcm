@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <bitset>
+#include <cmath>
 
 /* --- NUMPY 1.x / 2.x COMPATIBILITY ------------------------------------------------------------------------------- */
 /* NumPy 2.0 made PyArray_Descr opaque; these accessors exist from 2.0 on, so provide fallbacks for 1.x headers. */
@@ -64,85 +65,131 @@
 #define eps  2.22045e-16
 
 /* --- UTILS ------------------------------------------------------------------------------------------------------- */
-int factorial(int n)
+/* Find the range of a C-contiguous double array. Fails on NaN or infinite values. */
+static int
+PyArray_double_range(PyArrayObject* darr, double* vmin, double* vmax)
 {
-  return (n == 1 || n == 0) ? 1 : factorial(n - 1) * n;
+    const double *src = (const double*) PyArray_DATA(darr);
+    npy_intp i, size = PyArray_SIZE(darr);
+
+    *vmin = 0.0;
+    *vmax = 0.0;
+    if(size == 0) return 0;
+
+    *vmin = *vmax = src[0];
+    for(i = 0; i < size; i++){
+        if(!std::isfinite(src[i])){
+            PyErr_SetString(PyExc_ValueError, "input array contains NaN or infinite values");
+            return -1;
+        }
+        if(src[i] < *vmin) *vmin = src[i];
+        if(src[i] > *vmax) *vmax = src[i];
+    }
+    return 0;
 }
 
 NPY_NO_EXPORT PyArrayObject*
 PyArray_bin(PyArrayObject* iarr, int bins)
 {
-    NpyIter *iter;
-    NpyIter_IterNextFunc *iternext;
-    PyArrayObject *op[2], *oarr;
-    npy_intp *stride, *innersizeptr, size, max;
-    npy_uint32 op_flags[2];
-    PyArray_Descr *op_dtypes[2];
-    char **dataptr;
-    int i, *dst;
+    /* Bins a C-contiguous double array: [0, max] is split into `bins` equal-width bins, giving int32 values in
+       [0, bins - 1]. Negative, NaN and infinite values are rejected. */
+    PyArrayObject *oarr;
+    const double *src;
+    npy_intp i, size;
+    double vmin, vmax, scale;
+    int *dst;
 
-    PyArray_ArgFunc *argmax;
-
-    argmax = PyDataType_GetArrFuncs(PyArray_DESCR(iarr))->argmax;
-    argmax(PyArray_DATA(iarr), PyArray_SIZE(iarr), &max, NULL);
-
-    op[0] = iarr;
-    op[1] = NULL;
-    op_flags[0] = NPY_ITER_READONLY;
-    op_flags[1] = NPY_ITER_WRITEONLY | NPY_ITER_ALLOCATE;
-    op_dtypes[0] = NULL;
-    op_dtypes[1] = PyArray_DescrFromType(NPY_INT);
-
-    iter = NpyIter_MultiNew(2, op, NPY_ITER_EXTERNAL_LOOP,
-                                   NPY_KEEPORDER,
-                                   NPY_UNSAFE_CASTING,
-                            op_flags, op_dtypes);
-
-    iternext = NpyIter_GetIterNext(iter, NULL);
-    if (iternext == NULL) {
-        NpyIter_Deallocate(iter);
+    if(bins < 1){
+        PyErr_SetString(PyExc_ValueError, "bins must be at least 1");
+        return NULL;
+    }
+    if(PyArray_TYPE(iarr) != NPY_DOUBLE || !PyArray_IS_C_CONTIGUOUS(iarr)){
+        PyErr_SetString(PyExc_TypeError, "internal error: PyArray_bin expects a C-contiguous float64 array");
+        return NULL;
+    }
+    if(PyArray_double_range(iarr, &vmin, &vmax) < 0) return NULL;
+    if(vmin < 0){
+        PyErr_SetString(PyExc_ValueError, "input array contains negative values");
         return NULL;
     }
 
-    innersizeptr = NpyIter_GetInnerLoopSizePtr(iter);
-    dataptr = NpyIter_GetDataPtrArray(iter);
-    stride = NpyIter_GetInnerStrideArray(iter);
+    oarr = (PyArrayObject*) PyArray_ZEROS(PyArray_NDIM(iarr), PyArray_DIMS(iarr), NPY_INT, 0);
+    if(oarr == NULL) return NULL;
+    if(vmax <= 0) return oarr; /* all zeros (or empty): everything stays in bin 0 */
 
-    /* TODO: There has to be a way to do this via ufunc for every datatype
-             Maybbe port it to C++ and use templates?
-    */
-    if(PyArray_ISINTEGER(iarr)){
-        int src;
-        double amax = (double)((int*) PyArray_DATA(iarr))[max];
-        do {
-            size = *innersizeptr;
-            for(i = 0; i < size; i++, dataptr[0] += stride[0], dataptr[1] += stride[1]){
-                    src = *((int*) dataptr[0]);
-                    dst = (int*) dataptr[1];
+    src = (const double*) PyArray_DATA(iarr);
+    dst = (int*) PyArray_DATA(oarr);
+    size = PyArray_SIZE(iarr);
+    scale = bins / vmax;
 
-                    *dst = (int) ((src/amax) * bins + 0.5);
-            }
-        } while(iternext(iter));
-    }else{
-        double src, amax = ((double*) PyArray_DATA(iarr))[max];
-
-        do {
-            size = *innersizeptr;
-            for(i = 0; i < size; i++, dataptr[0] += stride[0], dataptr[1] += stride[1]){
-                    src = *((double*) dataptr[0]);
-                    dst = (int*) dataptr[1];
-
-                    *dst = (int) ((src/amax) * bins + 0.5);
-            }
-        } while(iternext(iter));
+    for(i = 0; i < size; i++){
+        int b = (int) (src[i] * scale);
+        dst[i] = (b < bins) ? b : bins - 1;
     }
 
-    oarr = (PyArrayObject*) NpyIter_GetOperandArray(iter)[1];
-    Py_INCREF(oarr);
-
-    NpyIter_Deallocate(iter);
-
     return oarr;
+}
+
+/* Converts the user's image into a C-contiguous int32 array whose values are valid bin indices in [0, bins - 1],
+   which is what the GLCM kernels require. Non-integer input is always binned; integer input is binned only when it
+   exceeds the bin range and `check` is enabled, otherwise an out-of-range image is rejected. */
+static PyArrayObject*
+PyArray_prepare_image(PyObject* array, int bins, int check, int min_ndim, int max_ndim)
+{
+    PyArrayObject *orig, *darr, *iarr = NULL;
+    double vmin, vmax;
+    int ndim, is_int;
+
+    if(bins < 1){
+        PyErr_SetString(PyExc_ValueError, "bins must be at least 1");
+        return NULL;
+    }
+
+    orig = (PyArrayObject*) PyArray_FROM_O(array);
+    if(orig == NULL) return NULL;
+
+    ndim = PyArray_NDIM(orig);
+    if(ndim < min_ndim || ndim > max_ndim){
+        if(min_ndim == max_ndim)
+            PyErr_Format(PyExc_ValueError, "input array must be %dD, got %dD", min_ndim, ndim);
+        else
+            PyErr_Format(PyExc_ValueError, "input array must be %dD or %dD, got %dD", min_ndim, max_ndim, ndim);
+        Py_DECREF(orig);
+        return NULL;
+    }
+
+    is_int = PyArray_ISINTEGER(orig) || PyArray_ISBOOL(orig);
+
+    darr = (PyArrayObject*) PyArray_FROM_OTF((PyObject*) orig, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
+    if(darr == NULL) goto done;
+    if(PyArray_double_range(darr, &vmin, &vmax) < 0) goto done;
+
+    if(vmin < 0){
+        PyErr_SetString(PyExc_ValueError, "input array contains negative values");
+        goto done;
+    }
+
+    if(is_int && vmax < bins){
+        iarr = (PyArrayObject*) PyArray_FROM_OTF((PyObject*) orig, NPY_INT, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
+    }
+    else if(!is_int){
+        if(check && PyErr_WarnEx(NULL, "input array is not of integer type and is therefore binned. "
+                                       "This results in performance loss", 1) < 0) goto done;
+        iarr = PyArray_bin(darr, bins);
+    }
+    else if(check){
+        if(PyErr_WarnEx(NULL, "input array contains values >= bins and is therefore binned", 1) < 0) goto done;
+        iarr = PyArray_bin(darr, bins);
+    }
+    else{
+        PyErr_Format(PyExc_ValueError, "input array contains values >= bins (%d); increase bins or "
+                                       "use check=True to bin the input automatically", bins);
+    }
+
+done:
+    Py_XDECREF(darr);
+    Py_DECREF(orig);
+    return iarr;
 }
 
 NPY_NO_EXPORT npy_intp
@@ -183,8 +230,26 @@ PyArray_glcm_gen_dirs(PyArrayObject* dirs, PyArrayObject* dists, int symmetric)
     npy_intp shape[3]={0, 0, 2};
     int data, dir_bits=0, i, j, *dir_x, *dir_y;
 
+    if(PyArray_NDIM(dirs) != 1 || PyArray_NDIM(dists) != 1 ||
+       PyArray_DIMS(dirs)[0] == 0 || PyArray_DIMS(dists)[0] == 0){
+        PyErr_SetString(PyExc_ValueError, "dists and dirs must be non-empty 1D sequences");
+        return NULL;
+    }
+
+    for(i = 0; i < PyArray_DIMS(dists)[0]; i++){
+        if(*((int*) PyArray_GETPTR1(dists, i)) < 1){
+            PyErr_SetString(PyExc_ValueError, "distances must be positive integers");
+            return NULL;
+        }
+    }
+
     for(i = 0; i < PyArray_DIMS(dirs)[0]; i++){
         data = *((int *) PyArray_GETPTR1(dirs, i));
+
+        if(data < 1 || data > 8){
+            PyErr_SetString(PyExc_ValueError, "directions must be integers between 1 (N) and 8 (NW)");
+            return NULL;
+        }
 
         if(data > 4 && symmetric){
             dir_bits |= (1 << (data - 4));
@@ -198,6 +263,7 @@ PyArray_glcm_gen_dirs(PyArrayObject* dirs, PyArrayObject* dists, int symmetric)
     shape[1] = GLCM_POPCOUNT((unsigned int) dir_bits);
 
     oarr = (PyArrayObject *) PyArray_ZEROS(3, shape, NPY_INT, 0);
+    if(oarr == NULL) return NULL;
 
     for(i = 0; i < PyArray_DIMS(dists)[0]; i++){
         int k = 0, dist = *((int*) PyArray_GETPTR1(dists, i));
@@ -215,8 +281,9 @@ PyArray_glcm_gen_dirs(PyArrayObject* dirs, PyArrayObject* dists, int symmetric)
                     case 6: *dir_x = -dist; *dir_y = -dist; break;
                     case 7: *dir_x = -dist; *dir_y = 0; break;
                     case 8: *dir_x = -dist; *dir_y = dist; break;
-                    default: PyErr_SetString(PyExc_TypeError,
-                                "directions have to be between 0 and 8");
+                    default: PyErr_SetString(PyExc_ValueError,
+                                "directions must be integers between 1 (N) and 8 (NW)");
+                             Py_DECREF(oarr);
                              return NULL;
                 }
                 k++;
@@ -297,31 +364,42 @@ NPY_NO_EXPORT PyArrayObject*
 PyArray_pad(PyArrayObject* inarr, int width)
 {
     PyArrayObject *oarr=NULL;
-    PyArray_Descr *dtype;
-    npy_intp *ishape, oshape[NPY_MAXDIMS];
-    int i, ndim;
+    npy_intp *ishape, oshape[NPY_MAXDIMS], rowbytes;
+    int i, j, ndim;
 
     ndim = PyArray_NDIM(inarr);
-    dtype = PyArray_DTYPE(inarr);
     ishape = PyArray_SHAPE(inarr);
+
+    if(ndim != 2 && ndim != 3){
+        PyErr_SetString(PyExc_ValueError,
+                "cannot pad arrays with less than 2 or more than 3 dimensions");
+        return NULL;
+    }
+    if(width < 0){
+        PyErr_SetString(PyExc_ValueError, "pad width must be non-negative");
+        return NULL;
+    }
 
     for (i = 0; i < ndim; i++){
         oshape[i] = ishape[i] + 2 * width;
     }
 
-    oarr = (PyArrayObject *) PyArray_ZEROS((int) ndim, oshape, dtype->type, 0);
+    oarr = (PyArrayObject *) PyArray_ZEROS((int) ndim, oshape, PyArray_TYPE(inarr), 0);
+    if(oarr == NULL) return NULL;
+
+    rowbytes = ishape[ndim - 1] * PyArray_ITEMSIZE(inarr);
 
     if(ndim == 2){
         for (i = 0; i < ishape[0]; i++){
-            memcpy(PyArray_GETPTR2(oarr, i+width, width), PyArray_GETPTR2(inarr, i, 0), ishape[1] * PyDataType_ELSIZE(dtype));
+            memcpy(PyArray_GETPTR2(oarr, i+width, width), PyArray_GETPTR2(inarr, i, 0), rowbytes);
         }
     }
-    else if(ndim == 3){
-        /* TODO: implement 3D padding */
-    }
     else{
-        PyErr_SetString(PyExc_TypeError,
-                "cannot pad arrays with less than 2 or more than 3 dimensions");
+        for (i = 0; i < ishape[0]; i++){
+            for (j = 0; j < ishape[1]; j++){
+                memcpy(PyArray_GETPTR3(oarr, i+width, j+width, width), PyArray_GETPTR3(inarr, i, j, 0), rowbytes);
+            }
+        }
     }
 
     return oarr;
@@ -802,7 +880,7 @@ PyArray_xglcm_sum(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists
     dist_dim = (int) PyArray_DIMS(dists)[0];
     dir_dim = (int) PyArray_DIMS(dirs)[1];
 
-    arr_chan_cmb = factorial(arr_ndch) / (2*factorial(arr_ndch-2));
+    arr_chan_cmb = arr_ndch * (arr_ndch - 1) / 2;
 
     if(symmetric){
 
@@ -846,7 +924,7 @@ PyArray_xglcm_sum(PyArrayObject* iarr, PyArrayObject* dirs, PyArrayObject* dists
             }
         }
     }else{
-        PyErr_SetString(PyExc_ValueError, "xglcm requires a 3D (multi-channel) input array");
+        PyErr_SetString(PyExc_NotImplementedError, "xglcm sum mode is only implemented for symmetric=True");
     }
 
     return glcm;
@@ -1607,19 +1685,19 @@ array_bin(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
     static const char *kwlist[] = {"array", "bins", NULL};
     PyObject *array;
     PyArrayObject *iarr, *oarr;
-    npy_intp bins;
+    int bins;
 
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "Oi", (char **) kwlist,
                 &array, &bins)) {
         return NULL;
     }
 
-    iarr = (PyArrayObject*) PyArray_FROM_OTF(array, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY); /* TODO: check for int array */
+    iarr = (PyArrayObject*) PyArray_FROM_OTF(array, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
     if(iarr == NULL) return NULL;
 
     oarr = PyArray_bin(iarr, bins);
 
-    //Py_DECREF(iarr);
+    Py_DECREF(iarr);
 
     return  (PyObject*) oarr;
 }
@@ -1629,7 +1707,7 @@ array_glcm(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
 {
     static const char *kwlist[] = {"array", "dists", "dirs", "mode", "symmetric", "bins", "normalized", "check", NULL};
     PyObject *array, *directions, *distances;
-    PyArrayObject *iarr, *dirs, *dists, *glcm;
+    PyArrayObject *iarr = NULL, *dirs = NULL, *dists = NULL, *gdirs = NULL, *glcm = NULL;
     int check=1, bins=256, symmetric=1, normalized=1;
     char *mode;
 
@@ -1638,41 +1716,42 @@ array_glcm(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
         return NULL;
     }
 
-    iarr = (PyArrayObject*)PyArray_FROM_OF(array, NPY_ARRAY_IN_ARRAY);
-    if (iarr == NULL) return NULL;
-
-    dirs = (PyArrayObject*)PyArray_FROM_OTF(directions, NPY_INT, NPY_ARRAY_IN_ARRAY);
-    if (dirs == NULL) return NULL;
-
-    dists = (PyArrayObject*)PyArray_FROM_OTF(distances, NPY_INT, NPY_ARRAY_IN_ARRAY);
-    if (dists == NULL) return NULL;
-
-    if(check){
-        if(!PyArray_ISINTEGER(iarr)){
-            PyErr_WarnEx(NULL, "input array is not of integer type and is therefore binned. This results in performance loss", 1);
-            iarr = PyArray_bin(iarr, bins);
-        }
-        else {
-            //iarr = PyArray_bin(iarr, bins); /* Todo: do this condionally */
-        }
+    if(strcmp(mode, "sum") != 0 && strcmp(mode, "raw") != 0){
+        PyErr_Format(PyExc_ValueError, "mode must be \"sum\" or \"raw\", got \"%s\"", mode);
+        return NULL;
     }
-    dirs = PyArray_glcm_gen_dirs(dirs, dists, symmetric);
+
+    iarr = PyArray_prepare_image(array, bins, check, 2, 3);
+    if (iarr == NULL) goto done;
+
+    dirs = (PyArrayObject*)PyArray_FROM_OTF(directions, NPY_INT, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
+    if (dirs == NULL) goto done;
+
+    dists = (PyArrayObject*)PyArray_FROM_OTF(distances, NPY_INT, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
+    if (dists == NULL) goto done;
+
+    gdirs = PyArray_glcm_gen_dirs(dirs, dists, symmetric);
+    if (gdirs == NULL) goto done;
 
     if(strcmp(mode, "sum") == 0){
         if(normalized){
-            glcm = PyArray_glcm_sum<double, NPY_DOUBLE>(iarr, dirs, dists, bins, symmetric, normalized);
+            glcm = PyArray_glcm_sum<double, NPY_DOUBLE>(iarr, gdirs, dists, bins, symmetric, normalized);
         }else{
-            glcm = PyArray_glcm_sum<int, NPY_INT>(iarr, dirs, dists, bins, symmetric, normalized);
+            glcm = PyArray_glcm_sum<int, NPY_INT>(iarr, gdirs, dists, bins, symmetric, normalized);
         }
     }else{
         if(normalized){
-            glcm = PyArray_glcm_raw<double, NPY_DOUBLE>(iarr, dirs, dists, bins, symmetric, normalized);
+            glcm = PyArray_glcm_raw<double, NPY_DOUBLE>(iarr, gdirs, dists, bins, symmetric, normalized);
         }else{
-            glcm = PyArray_glcm_raw<int, NPY_INT>(iarr, dirs, dists, bins, symmetric, normalized);
+            glcm = PyArray_glcm_raw<int, NPY_INT>(iarr, gdirs, dists, bins, symmetric, normalized);
         }
     }
 
-    Py_DECREF(dirs);
+done:
+    Py_XDECREF(iarr);
+    Py_XDECREF(dirs);
+    Py_XDECREF(dists);
+    Py_XDECREF(gdirs);
 
     return (PyObject *) glcm;
 }
@@ -1682,7 +1761,7 @@ array_xglcm(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
 {
     static const char *kwlist[] = {"array", "dists", "dirs", "mode", "symmetric", "bins", "normalized", "check", NULL};
     PyObject *array, *directions, *distances;
-    PyArrayObject *iarr, *dirs, *dists, *glcm;
+    PyArrayObject *iarr = NULL, *dirs = NULL, *dists = NULL, *gdirs = NULL, *glcm = NULL;
     int check=1, bins=256, symmetric=1, normalized=1;
     char *mode;
 
@@ -1691,118 +1770,151 @@ array_xglcm(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
         return NULL;
     }
 
-    iarr = (PyArrayObject*)PyArray_FROM_OF(array, NPY_ARRAY_IN_ARRAY);
-    if (iarr == NULL) return NULL;
-
-    dirs = (PyArrayObject*)PyArray_FROM_OTF(directions, NPY_INT, NPY_ARRAY_IN_ARRAY);
-    if (dirs == NULL) return NULL;
-
-    dists = (PyArrayObject*)PyArray_FROM_OTF(distances, NPY_INT, NPY_ARRAY_IN_ARRAY);
-    if (dists == NULL) return NULL;
-
-    /* Todo: check for only 3D images */
-    if(check){
-        if(!PyArray_ISINTEGER(iarr)){
-            PyErr_WarnEx(NULL, "input array is not of integer type and is therefore binned. This results in performance loss", 1);
-            iarr = PyArray_bin(iarr, bins);
-        }
-        else {
-            //iarr = PyArray_bin(iarr, bins); /* do this condionally */
-        }
+    if(strcmp(mode, "sum") != 0 && strcmp(mode, "raw") != 0){
+        PyErr_Format(PyExc_ValueError, "mode must be \"sum\" or \"raw\", got \"%s\"", mode);
+        return NULL;
     }
-    dirs = PyArray_glcm_gen_dirs(dirs, dists, symmetric);
+
+    if(strcmp(mode, "sum") == 0 && !symmetric){
+        PyErr_SetString(PyExc_NotImplementedError, "xglcm sum mode is only implemented for symmetric=True");
+        return NULL;
+    }
+
+    iarr = PyArray_prepare_image(array, bins, check, 3, 3);
+    if (iarr == NULL) goto done;
+
+    if (PyArray_DIMS(iarr)[2] < 2){
+        PyErr_SetString(PyExc_ValueError, "xglcm requires an input array with at least 2 channels");
+        goto done;
+    }
+
+    dirs = (PyArrayObject*)PyArray_FROM_OTF(directions, NPY_INT, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
+    if (dirs == NULL) goto done;
+
+    dists = (PyArrayObject*)PyArray_FROM_OTF(distances, NPY_INT, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
+    if (dists == NULL) goto done;
+
+    gdirs = PyArray_glcm_gen_dirs(dirs, dists, symmetric);
+    if (gdirs == NULL) goto done;
 
     if(strcmp(mode, "sum") == 0){
-        glcm = PyArray_xglcm_sum<int, double, NPY_DOUBLE>(iarr, dirs, dists, bins, symmetric, normalized);
+        glcm = PyArray_xglcm_sum<int, double, NPY_DOUBLE>(iarr, gdirs, dists, bins, symmetric, normalized);
     }else{
         if(normalized){
-            glcm = PyArray_xglcm_raw<double, NPY_DOUBLE>(iarr, dirs, dists, bins, symmetric, normalized);
+            glcm = PyArray_xglcm_raw<double, NPY_DOUBLE>(iarr, gdirs, dists, bins, symmetric, normalized);
         }else{
-            glcm = PyArray_xglcm_raw<int, NPY_INT>(iarr, dirs, dists, bins, symmetric, normalized);
+            glcm = PyArray_xglcm_raw<int, NPY_INT>(iarr, gdirs, dists, bins, symmetric, normalized);
         }
     }
 
-    Py_DECREF(dirs);
+done:
+    Py_XDECREF(iarr);
+    Py_XDECREF(dirs);
+    Py_XDECREF(dists);
+    Py_XDECREF(gdirs);
 
     return (PyObject *) glcm;
+}
+
+/* Stores a newly computed feature in the result dict and releases our reference to it. */
+static int
+set_feature(PyObject *dict, const char *key, PyArrayObject *value)
+{
+    int rc;
+
+    if(value == NULL) return -1;
+    rc = PyDict_SetItemString(dict, key, (PyObject*) value);
+    Py_DECREF(value);
+    return rc;
 }
 
 static PyObject*
 array_glcm_features(PyObject *NPY_UNUSED(ignored), PyObject *args, PyObject *kwds)
 {
     static const char *kwlist[] = {"array", "features", "normalized", "symmetric", NULL};
-    PyObject *array, *dict;
-    PyArrayObject *iarr;
-    int features, normalized=1, symmetric=1;
+    PyObject *array, *dict = NULL;
+    PyArrayObject *iarr = NULL, *cprob = NULL, *dprob = NULL, *savg = NULL, *javrg = NULL;
+    npy_intp ndim;
+    int features, normalized=1, symmetric=1, ok = 0;
 
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "Oi|ii", (char **) kwlist,
                 &array, &features, &normalized, &symmetric)) {
         return NULL;
     }
 
-    iarr = (PyArrayObject*)PyArray_FROM_OTF(array, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    iarr = (PyArrayObject*)PyArray_FROM_OTF(array, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
     if (iarr == NULL) return NULL;
 
-    dict = PyDict_New();
-
-    if(features & ASM)      PyDict_SetItemString(dict, "ASM", \
-                                                        (PyObject*) PyArray_angular_second_moment(iarr));
-    if(features & CONTRAST) PyDict_SetItemString(dict, "Contrast", \
-                                                        (PyObject*) PyArray_contrast(iarr));
-    if(features & INVDIFFM) PyDict_SetItemString(dict, "IDM", \
-                                                        (PyObject*) PyArray_inverse_diff_moment(iarr, symmetric));
-    if(features & INVDIFF)  PyDict_SetItemString(dict, "IDF", \
-                                                        (PyObject*) PyArray_inverse_diff(iarr, symmetric));
-    if(features & ENTROPY)  PyDict_SetItemString(dict, "Entropy", \
-                                                        (PyObject*) PyArray_entropy(iarr, symmetric));
-    if(features & AUTOCORR) PyDict_SetItemString(dict, "Autocorrelation", \
-                                                        (PyObject*) PyArray_autocorrelation(iarr, symmetric));
-    if(features & DISSIM)   PyDict_SetItemString(dict, "Dissimilarity", \
-                                                        (PyObject*) PyArray_dissimilarity(iarr, symmetric));
-
-
-    if(features & (SUMAVG | SUMVAR | SUMENTRP)){
-        PyArrayObject *cprob, *savg=NULL;
-
-        cprob = PyArray_comb_prob(iarr, symmetric, "sum");
-        if(features & SUMAVG){
-            savg = PyArray_sum_average(iarr, cprob);
-            PyDict_SetItemString(dict, "Sum Average", (PyObject*) savg);
-        }
-        if(features & SUMVAR){
-            if(!savg) savg = PyArray_sum_average(iarr, cprob);
-            PyDict_SetItemString(dict, "Sum Variance", (PyObject*) PyArray_sum_var(iarr, cprob, savg));
-        }
-        if(features & SUMENTRP) PyDict_SetItemString(dict, "Sum Entropy", \
-                                                            (PyObject*) PyArray_sum_entropy(iarr, cprob));
+    ndim = PyArray_NDIM(iarr);
+    if(ndim < 2 || PyArray_DIMS(iarr)[ndim - 1] != PyArray_DIMS(iarr)[ndim - 2] || PyArray_DIMS(iarr)[ndim - 1] == 0){
+        PyErr_SetString(PyExc_ValueError, "input must be a GLCM or an array of GLCMs whose "
+                                          "last two axes have equal, non-zero size");
+        goto done;
     }
 
-    if(features & (DIFFAVG | DIFFVAR | DIFFENTRP)){
-        PyArrayObject *dprob;
+    if(features & (CORRELATION | SSQ | DIFFVAR)){
+        if(PyErr_WarnEx(NULL, "correlation, sum of squares and difference variance are not implemented yet "
+                              "and are ignored", 1) < 0) goto done;
+    }
 
-        dprob = PyArray_comb_diff(iarr, symmetric);
+    dict = PyDict_New();
+    if(dict == NULL) goto done;
 
-        if(features & DIFFAVG){
-            PyDict_SetItemString(dict, "Diff Average", \
-                                                        (PyObject*) PyArray_diff_average(iarr, dprob));
+    if(features & ASM)      if(set_feature(dict, "ASM", PyArray_angular_second_moment(iarr)) < 0) goto done;
+    if(features & CONTRAST) if(set_feature(dict, "Contrast", PyArray_contrast(iarr)) < 0) goto done;
+    if(features & INVDIFFM) if(set_feature(dict, "IDM", PyArray_inverse_diff_moment(iarr, symmetric)) < 0) goto done;
+    if(features & INVDIFF)  if(set_feature(dict, "IDF", PyArray_inverse_diff(iarr, symmetric)) < 0) goto done;
+    if(features & ENTROPY)  if(set_feature(dict, "Entropy", PyArray_entropy(iarr, symmetric)) < 0) goto done;
+    if(features & AUTOCORR) if(set_feature(dict, "Autocorrelation", PyArray_autocorrelation(iarr, symmetric)) < 0) goto done;
+    if(features & DISSIM)   if(set_feature(dict, "Dissimilarity", PyArray_dissimilarity(iarr, symmetric)) < 0) goto done;
+
+    if(features & (SUMAVG | SUMVAR | SUMENTRP)){
+        cprob = PyArray_comb_prob(iarr, symmetric, "sum");
+        if(cprob == NULL) goto done;
+
+        if(features & (SUMAVG | SUMVAR)){
+            savg = PyArray_sum_average(iarr, cprob);
+            if(savg == NULL) goto done;
         }
+        if(features & SUMAVG){
+            if(PyDict_SetItemString(dict, "Sum Average", (PyObject*) savg) < 0) goto done;
+        }
+        if(features & SUMVAR)   if(set_feature(dict, "Sum Variance", PyArray_sum_var(iarr, cprob, savg)) < 0) goto done;
+        if(features & SUMENTRP) if(set_feature(dict, "Sum Entropy", PyArray_sum_entropy(iarr, cprob)) < 0) goto done;
+    }
 
-        if(features & DIFFENTRP) PyDict_SetItemString(dict, "Diff Entropy", \
-                                                            (PyObject*) PyArray_diff_entropy(iarr, dprob));
+    if(features & (DIFFAVG | DIFFENTRP)){
+        dprob = PyArray_comb_diff(iarr, symmetric);
+        if(dprob == NULL) goto done;
+
+        if(features & DIFFAVG)   if(set_feature(dict, "Diff Average", PyArray_diff_average(iarr, dprob)) < 0) goto done;
+        if(features & DIFFENTRP) if(set_feature(dict, "Diff Entropy", PyArray_diff_entropy(iarr, dprob)) < 0) goto done;
     }
 
     if(features & (CLSTRPROM | CLSTRSHAD | CLSTRTEND)){
-        PyArrayObject *javrg;
-
         javrg = PyArray_glcm_mean(iarr, symmetric);
-        if(features & CLSTRPROM) PyDict_SetItemString(dict, "Cluster Prominence", \
-                                                        (PyObject*) PyArray_cluster_prominence(iarr, javrg, symmetric));
-        if(features & CLSTRSHAD) PyDict_SetItemString(dict, "Cluster Shade", \
-                                                        (PyObject*) PyArray_cluster_shade(iarr, javrg, symmetric));
-        if(features & CLSTRTEND) PyDict_SetItemString(dict, "Cluster Tendency", \
-                                                        (PyObject*) PyArray_cluster_tendency(iarr, javrg, symmetric));
+        if(javrg == NULL) goto done;
+
+        if(features & CLSTRPROM)
+            if(set_feature(dict, "Cluster Prominence", PyArray_cluster_prominence(iarr, javrg, symmetric)) < 0) goto done;
+        if(features & CLSTRSHAD)
+            if(set_feature(dict, "Cluster Shade", PyArray_cluster_shade(iarr, javrg, symmetric)) < 0) goto done;
+        if(features & CLSTRTEND)
+            if(set_feature(dict, "Cluster Tendency", PyArray_cluster_tendency(iarr, javrg, symmetric)) < 0) goto done;
     }
 
+    ok = 1;
+
+done:
+    Py_XDECREF(iarr);
+    Py_XDECREF(cprob);
+    Py_XDECREF(dprob);
+    Py_XDECREF(savg);
+    Py_XDECREF(javrg);
+    if(!ok){
+        Py_XDECREF(dict);
+        return NULL;
+    }
     return dict;
 }
 
