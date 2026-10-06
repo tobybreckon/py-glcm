@@ -6,7 +6,7 @@ py-glcm is a C++ extension, so you need a C++ compiler and the Python developmen
 * **Fedora:** `sudo dnf install gcc-c++ python3-devel`
 * **Debian/Ubuntu:** `sudo apt install build-essential python3-dev`
 
-Then, from the repository root (ideally inside a virtual environment):
+To install, from the repository root (ideally inside a virtual environment):
 
 ```bash
 python3 -m venv .venv
