@@ -1,7 +1,39 @@
 # Installation
 
-    pip install .
-    
+py-glcm is a C++ extension, so you need a C++ compiler and the Python development headers:
+
+* **Arch:** `sudo pacman -S base-devel`
+* **Fedora:** `sudo dnf install gcc-c++ python3-devel`
+* **Debian/Ubuntu:** `sudo apt install build-essential python3-dev`
+
+Then, from the repository root (ideally inside a virtual environment):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install .
+```
+
+`pip install .` builds the extension against NumPy 2.x in an isolated build environment. The resulting module also
+works with NumPy >= 1.25 at runtime. Use `pip install . -v` to see the compiler output.
+
+Do not use `python setup.py install`; it is deprecated by setuptools.
+
+## Running the tests
+
+Install the test dependencies, then run the tests as modules from the repository root:
+
+```bash
+pip install scipy scikit-image
+python -m tests.sanity
+python -m tests.features
+```
+
+Every line of output should report **check!**. After changing `py-glcm/core/src/glcm.cpp`, rerun `pip install .`
+to rebuild before testing again.
+
+`tests/benchmark.py` compares speed against other libraries and additionally requires `SimpleITK` and `pyradiomics`.
+
 # Usage
 * [Grey Level Co-occurance Matrix](# Grey Level Co-occurance Matrix)
  * [glcm](# glcm.glcm)
