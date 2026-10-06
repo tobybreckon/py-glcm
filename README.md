@@ -1,346 +1,241 @@
 # Installation
 
-    python setup.py install
-    
-# Usage
-* [Grey Level Co-occurance Matrix](# Grey Level Co-occurance Matrix)
- * [glcm](# glcm.glcm)
- * xglcm
-* GLCM Features
+py-glcm is a C++ extension, so you need a C++ compiler and the Python development headers:
 
-# Grey Level Co-occurance Matrix
+* **Arch:** `sudo pacman -S base-devel`
+* **Fedora:** `sudo dnf install gcc-c++ python3-devel`
+* **Debian/Ubuntu:** `sudo apt install build-essential python3-dev`
+
+To install, from the repository root (ideally inside a virtual environment):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install .
+```
+
+`pip install .` builds the extension against NumPy 2.x in an isolated build environment. The resulting module also
+works with NumPy >= 1.25 at runtime. Use `pip install . -v` to see the compiler output.
+
+Do not use `python setup.py install`; it is deprecated by setuptools.
+
+## Running the tests
+
+Install the test dependencies, then run the tests as modules from the repository root:
+
+```bash
+pip install scipy scikit-image
+python -m tests.sanity
+python -m tests.features
+```
+
+Every line of output should report **check!**. After changing `py-glcm/core/src/glcm.cpp`, rerun `pip install .`
+to rebuild before testing again.
+
+`tests/benchmark.py` compares speed against other libraries and additionally requires `SimpleITK` and `pyradiomics`.
+
+# Usage
+
+* [Grey Level Co-occurrence Matrix](#grey-level-co-occurrence-matrix)
+  * [glcm.glcm](#glcmglcm)
+  * [glcm.xglcm](#glcmxglcm)
+* [GLCM Features](#glcm-features)
+  * [glcm.glcm_features](#glcmglcm_features)
+  * [Supported Features](#supported-features)
+
+```python
+import numpy as np
+import glcm
+
+img = (np.random.rand(64, 64) * 8).astype(np.int32)
+
+# One GLCM for distance 1, summed over directions N, NE, E and SE
+m = glcm.glcm(img, [1], [1, 2, 3, 4], "sum", bins=8)
+
+# Select features by combining flags with |
+features = glcm.glcm_features(m, glcm.asm | glcm.contrast)
+print(features["ASM"], features["Contrast"])
+```
+
+# Grey Level Co-occurrence Matrix
 
 ## glcm.glcm
 
-glcm.**glcm(**_array, dists, dirs, mode, symmetric=True, bins=256, normalized=True, check=True_**)**
-  
+```python
+glcm.glcm(array, dists, dirs, mode, symmetric=True, bins=256, normalized=True, check=True)
+```
+
 Generates a GLCM.
 
-<table>
+### Parameters
 
-<tr>
-<td style="width: 120px; border:none; border-left: 4px solid #f0b37e;">
-<h5>Parameters:</h5>
-</td>
-<td style="border:none;">
-<b>array : </b> <i>array_like</i> <br />
+* **array** : *array_like*
 
-&nbsp;&nbsp;Input image, either 2D or 3D.
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-<b>dists :</b> <i>array_like<i> <br />
+  Input image, either 2D or 3D.
 
-&nbsp;&nbsp;Array of desired integer distances [d1, d2, ..., dn].
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-<b>dirs</b> : <i>array_like</i>
+* **dists** : *array_like*
 
-&nbsp;&nbsp;Array of desired integer directions [d1, d2, ..., dn]. 1 Corresponds to N, 2 to NE, 3 to E, ... and 8 to NW.
+  Array of desired integer distances `[d1, d2, ..., dn]`.
 
-<blockquote><b>Caution!</b> Directions will be reordered ascendingly. To avoid confused outputs, please make sure to provide an ordered array.</blockquote>
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-<b>mode</b> : <i>string</i> <br />
+* **dirs** : *array_like*
 
-Operation mode of the glcm. Features "sum" and "raw".
+  Array of desired integer directions `[d1, d2, ..., dn]`. 1 corresponds to N, 2 to NE, 3 to E, ... and 8 to NW.
 
-In raw-mode a glcm is generated for every combination of distances and directions.
+  > **Caution!** Directions will be reordered in ascending order. To avoid confusing outputs, make sure to provide
+  > an ordered array.
 
-In sum-mode all desired directions are added together so only one glcm per distance is generated. This is far more efficient than summing up afterwards.
+* **mode** : *string*
 
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-<b>symmetric</b> : <i>boolean, optional</i> <br />
+  Operation mode of the GLCM, either `"sum"` or `"raw"`.
 
-<blockquote><b>Caution!</b> Running in symmetric mode will remove opposing directions and will replace directions 5 to 8 with their corresponding counterparts! To avoid confusing outputs please make sure only to use directions 1 to 4 in symmetric mode!
-</blockquote>
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-<b>bins</b> : <i>int, optional</i> <br />
+  In raw mode, a GLCM is generated for every combination of distances and directions.
 
-Number of bins. When input checking is enabled, the input image is binned to this number if the maximum image value exceeds the number of bins. This happens aswell if the input image is not of integer type. 
+  In sum mode, all desired directions are added together, so only one GLCM per distance is generated. This is far
+  more efficient than summing up afterwards.
 
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-<b>normalized</b> : <i>boolean, optional</i> <br />
-Determines if the output shall be normalized or not.
+* **symmetric** : *boolean, optional*
 
-<blockquote><b>Caution!</b> The normalization will fail if the input image has more than 10^15 pixels.</blockquote>
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-<b>check</b> : <i>boolean, optional</i> <br />
-Determines if the input should be checked for correctness. 
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-<b>Returns:</b>
-</td>
-<td style="border:none;">
-<b>glcm :</b> <i>ndarray</i> <br />
+  > **Caution!** Running in symmetric mode will remove opposing directions and will replace directions 5 to 8 with
+  > their corresponding counterparts. To avoid confusing outputs, only use directions 1 to 4 in symmetric mode.
 
-Array of glcm(s) with the following shape: 
+* **bins** : *int, optional*
 
-[distances][directions][channels][bins][bins] 
-</td>
-</tr>
-</table>
+  Number of bins. When input checking is enabled, the input image is binned to this number if the maximum image
+  value exceeds the number of bins. This also happens if the input image is not of integer type.
+
+* **normalized** : *boolean, optional*
+
+  Determines whether the output is normalized.
+
+  > **Caution!** Normalization will fail if the input image has more than 10^15 pixels.
+
+* **check** : *boolean, optional*
+
+  Determines whether the input is checked for correctness.
+
+### Returns
+
+* **glcm** : *ndarray*
+
+  Array of GLCM(s) with shape `[distances][directions][channels][bins][bins]`.
 
 ## glcm.xglcm
 
-glcm.**xglcm(**_array, dists, dirs, mode, symmetric=True, bins=256, normalized=True, check=True_**)**
-  
+```python
+glcm.xglcm(array, dists, dirs, mode, symmetric=True, bins=256, normalized=True, check=True)
+```
+
 Generates a GLCM for every channel combination.
 
-<table>
+### Parameters
 
-<tr>
-<td style="width: 120px; border:none; border-left: 4px solid #f0b37e">
-**Parameters:**
-</td>
-<td style="border:none;">
-**array** : _array_like_
+* **array** : *array_like*
 
-Input image with three dimensions with shape [dimx, dimy, channels]
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-**dists** : _array_like_
+  Input image with three dimensions and shape `[dimx, dimy, channels]`.
 
-Array of desired integer distances [d1, d2, ..., dn].
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-**dirs** : _array_like_
+* **dists** : *array_like*
 
-Array of desired integer directions [d1, d2, ..., dn]. 1 Corresponds to N, 2 to NE, 3 to E, ... and 8 to NW.
+  Array of desired integer distances `[d1, d2, ..., dn]`.
 
-**Caution!** Directions will be reordered ascendingly. To avoid confused outputs, please make sure to provide an ordered array.
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-**mode** : _string_
+* **dirs** : *array_like*
 
-Operation mode of the glcm. Features "sum" and "raw".
+  Array of desired integer directions `[d1, d2, ..., dn]`. 1 corresponds to N, 2 to NE, 3 to E, ... and 8 to NW.
 
-In raw-mode a glcm is generated for every combination of distances and directions.
+  > **Caution!** Directions will be reordered in ascending order. To avoid confusing outputs, make sure to provide
+  > an ordered array.
 
-In sum-mode all desired directions are added together so only one glcm per distance is generated. This is far more efficient than summing up afterwards.
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-**symmetric** : _boolean, optional_
+* **mode** : *string*
 
-**Caution!** Running in symmetric mode will remove opposing directions and will replace directions 5 to 8 with their corresponding counterparts! To avoid confusing outputs please make sure only to use directions 1 to 4 in symmetric mode!
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-**bins** : _int, optional_
+  Operation mode of the GLCM, either `"sum"` or `"raw"`.
 
-Number of bins. When input checking is enabled, the input image is binned to this number if the maximum image value exceeds the number of bins. This happens aswell if the input image is not of integer type. 
+  In raw mode, a GLCM is generated for every combination of distances and directions.
 
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-**normalized** : _boolean, optional_
-Determines if the output shall be normalized or not.
+  In sum mode, all desired directions are added together, so only one GLCM per distance is generated. This is far
+  more efficient than summing up afterwards.
 
-**Caution!** The normalization will fail if the input image has more than 10^15 pixels.
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-**check** : _boolean, optional_
-Determines if the input should be checked for correctness. 
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-**Returns:**
-</td>
-<td style="border:none;">
-**glcm** : _ndarray_
+* **symmetric** : *boolean, optional*
 
-Array of glcm(s) with the following shape: 
+  > **Caution!** Running in symmetric mode will remove opposing directions and will replace directions 5 to 8 with
+  > their corresponding counterparts. To avoid confusing outputs, only use directions 1 to 4 in symmetric mode.
 
-[distances][directions][source channels][target channels][bins][bins] 
-</td>
-</tr>
-<table>
+* **bins** : *int, optional*
 
-# GLCM Features  
+  Number of bins. When input checking is enabled, the input image is binned to this number if the maximum image
+  value exceeds the number of bins. This also happens if the input image is not of integer type.
+
+* **normalized** : *boolean, optional*
+
+  Determines whether the output is normalized.
+
+  > **Caution!** Normalization will fail if the input image has more than 10^15 pixels.
+
+* **check** : *boolean, optional*
+
+  Determines whether the input is checked for correctness.
+
+### Returns
+
+* **glcm** : *ndarray*
+
+  Array of GLCM(s) with shape `[distances][directions][source channels][target channels][bins][bins]`.
+
+# GLCM Features
 
 ## glcm.glcm_features
 
-glcm.**glcm_features(**_array, features, symmetric=True, normalized=True_**)**
-  
-Calculates features from a given set of GLCMs
+```python
+glcm.glcm_features(array, features, symmetric=True, normalized=True)
+```
 
-<table>
+Calculates features from a given set of GLCMs.
 
-<tr>
-<td style="width: 120px; border:none; border-left: 4px solid #f0b37e">
-**Parameters:**
-</td>
-<td style="border:none;">
-**array** : _array_like_
+### Parameters
 
-Array of glcms with shape where the last two axes covering the glcm entries.
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-**features** : _int_
+* **array** : *array_like*
 
-Binary input that determines the desired features. See below.
+  Array of GLCMs, where the last two axes hold the GLCM entries.
 
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-**symmetric** : _boolean, optional_
+* **features** : *int*
 
-Indicates if the input GLCM(s) are symmetric or not.
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-</td>
-<td style="border:none;">
-**normalized** : _boolean, optional_
-Determines if the input is normalized.
+  Bit flags selecting the desired features, combined with `|`. See [Supported Features](#supported-features).
 
-</td>
-</tr>
-<tr>
-<td style="border:none;border-left: 4px solid #f0b37e">
-**Returns:**
-</td>
-<td style="border:none;">
-**glcm** : _dict_
+* **symmetric** : *boolean, optional*
 
-Dictionary of features.
+  Indicates whether the input GLCM(s) are symmetric.
 
-</td>
-</tr>
-<table>
+* **normalized** : *boolean, optional*
 
-### Supported Features
+  Indicates whether the input is normalized.
 
-#### Angular Second Moment
-glcm.**asm**, dictionary: _"ASM"_
+### Returns
 
-<img src="/doc/latex/img/asm.png" width="200">
+* **features** : *dict*
 
-Measurement of homogeneous patterns in the image.
+  Dictionary mapping feature names to arrays of feature values.
 
-#### Contrast
-glcm.**contrast**, dictionary: _"Contrast"_
+## Supported Features
 
-#### Correlation
-glcm.**correl**, dictionary: _"Correlation"_
+| Feature                   | Flag                | Dictionary key         | Status              |
+|---------------------------|---------------------|------------------------|---------------------|
+| Angular Second Moment     | `glcm.asm`          | `"ASM"`                |                     |
+| Contrast                  | `glcm.contrast`     | `"Contrast"`           |                     |
+| Correlation               | `glcm.correl`       | `"Correlation"`        | Not implemented yet |
+| Autocorrelation           | `glcm.autocorrel`   | `"Autocorrelation"`    |                     |
+| Sum of Squares            | `glcm.ssq`          | `"SSQ"`                | Not implemented yet |
+| Inverse Difference Moment | `glcm.idm`          | `"IDM"`                |                     |
+| Inverse Difference        | `glcm.idf`          | `"IDF"`                |                     |
+| Sum Average               | `glcm.sumavg`       | `"Sum Average"`        |                     |
+| Sum Variance              | `glcm.sumvar`       | `"Sum Variance"`       |                     |
+| Sum Entropy               | `glcm.sumentrp`     | `"Sum Entropy"`        |                     |
+| Entropy                   | `glcm.entropy`      | `"Entropy"`            |                     |
+| Difference Average        | `glcm.diffavg`      | `"Diff Average"`       |                     |
+| Difference Variance       | `glcm.diffvar`      | `"Diff Variance"`      | Not implemented yet |
+| Difference Entropy        | `glcm.diffentrp`    | `"Diff Entropy"`       |                     |
+| Cluster Prominence        | `glcm.clusterprom`  | `"Cluster Prominence"` |                     |
+| Cluster Shade             | `glcm.clustershade` | `"Cluster Shade"`      |                     |
+| Cluster Tendency          | `glcm.clustertend`  | `"Cluster Tendency"`   |                     |
+| Dissimilarity             | `glcm.dissim`       | `"Dissimilarity"`      |                     |
 
-Not implemented yet
+The Angular Second Moment, `ASM = sum over i, j of p(i, j)^2`, measures how homogeneous the patterns in the image are.
 
-#### Autocorrelation
-glcm.**autocorrel**, dictionary: _"Auto Correlation"_
-
-#### Sum of Squares
-glcm.**ssq**, dictionary: _"SSQ"_
-
-Not implemented yet
-
-#### Inverse Difference Moment
-glcm.**idm**, dictionary: _"IDM"_
-
-#### Inverse Difference
-glcm.**idf**, dictionary: _"IDF"_
-
-#### Sum Average
-glcm.**sumavg**, dictionary: _"Sum Average"_
-
-#### Sum Variance
-glcm.**sumvar**, dictionary: _"Sum Variance"_
-
-#### Sum Entropy
-glcm.**sumentrp**, dictionary: _"Sum Entropy"_
-
-#### Difference Average
-glcm.**diffavg**, dictionary: _"Diff Average"_
-
-#### Difference Variance
-glcm.**diffvar**, dictionary: _"Diff Variance"_
-
-Not implemented yet
-
-#### Difference Entropy
-glcm.**diffentrp**, dictionary: _"Diff Entropy"_
-
-#### Cluster Prominence
-glcm.**clusterprom**, dictionary: _"Cluster Prominence"_
-
-#### Cluster Shade
-glcm.**clustershade**, dictionary: _"Cluster Shade"_
-
-#### Cluster Tendency
-glcm.**clustertend**, dictionary: _"Cluster Tendency"_
-
-#### Dissimilarity
-glcm.**Dissim**, dictionary: _"Dissimilarity"_
-
-
-
-
-  
+Entropy, Sum Entropy and Difference Entropy are computed with the base-10 logarithm.

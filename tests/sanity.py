@@ -2,7 +2,7 @@ from tests.utils.glcm import glcm, xglcm
 import glcm as op
 import numpy as np
 from scipy import ndimage
-from skimage.feature import greycomatrix, greycoprops
+from skimage.feature import graycomatrix, graycoprops
 
 nb_bins = 4
 nb_dims = 512

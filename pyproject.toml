@@ -1,0 +1,4 @@
+[build-system]
+# Building against NumPy 2.x produces a binary that also runs on NumPy >= 1.25.
+requires = ["setuptools>=61", "wheel", "numpy>=2.0"]
+build-backend = "setuptools.build_meta"

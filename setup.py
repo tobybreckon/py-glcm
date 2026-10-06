@@ -1,14 +1,12 @@
 import numpy as np
-from distutils.core import setup, Extension
+from setuptools import setup, Extension
 
 glcm = Extension('glcm',
-                    sources=['py-glcm/core/src/glcm.cpp'],
-                    include_dirs=[np.get_include()])
+                 sources=['py-glcm/core/src/glcm.cpp'],
+                 include_dirs=[np.get_include()])
 
 setup(name='py-glcm',
-      version='1.1a',
+      version='1.1a0',
       description='py-glcm provides native implementations of GLCM related functions.',
-      include_dirs=[np.get_include()],
+      install_requires=['numpy>=1.19'],
       ext_modules=[glcm])
-
-
